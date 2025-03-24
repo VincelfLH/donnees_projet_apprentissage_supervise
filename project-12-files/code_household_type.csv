@@ -1,0 +1,10 @@
+Code,Libellé
+"fm1_1","Homme vivant seul"
+"fm1_2","Femme vivant seule"
+"fm2_0","Plusieurs personnes sans famille"
+"fm3_1","Famille principale monoparentale composée d'un homme avec enfant(s)"
+"fm3_2","Famille principale monoparentale composée d'une femme avec enfant(s)"
+"fm4_1","Famille principale composée d'un couple de deux 'actifs ayant un emploi'"
+"fm4_2","Famille principale composée d'un couple où seul un homme a le statut 'd’actif ayant un emploi'"
+"fm4_3","Famille principale composée d'un couple où seule une femme a le statut 'd’actif ayant un emploi'"
+"fm4_4","Famille principale composée d'un couple d’aucun 'actif ayant un emploi'"
