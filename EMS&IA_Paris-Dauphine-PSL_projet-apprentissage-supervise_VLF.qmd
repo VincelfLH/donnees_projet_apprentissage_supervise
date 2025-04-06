@@ -1,0 +1,845 @@
+---
+title: "Projet - apprentissage supervisé"
+subtitle: "Executive Master Statistique et IA"
+author: Vincent Le Flem
+date: today
+format: 
+  pdf:
+    documentclass: article
+    papersize: a4
+    fontsize: 11pt
+    mainfont: "Times New Roman"
+    geometry: margin=2.5cm
+
+    toc: true
+    toc-title: "Table des matières"
+    number-sections: true
+    lof: false
+    lot: false
+
+    fig-width: 4
+    fig-height: 3
+    fig-cap-location: bottom
+    fig-align: center
+
+    titlepage: true
+    titlepage-color: "ffffff"
+    titlepage-text-color: "000080" 
+    titlepage-rule-color: "000080"
+    titlepage-rule-height: 2
+
+    include-in-header: header.tex
+    keep-tex: true
+---
+
+
+
+
+# Fusion et structuration du jeu de données d'entrainement
+À partir d’analyses exploratoires - à toutes fins utiles, le détail est joint dans le notebook associé - le jeu de données initial a été transformé pour rendre exploitables certaines variables, comme « insee_code », trop fine en l’état, et pour optimiser la modélisation prédictive. L'objectif est de maximiser au mieux le compromis entre perte potentielle d'information et efficience statistique du futur modèle. En particulier, il a été opté pour : 
+
+1. La réduction de la cardinalité et la structuration des professions. Le jeu de données initial contenait une variable « job_42 » à forte cardinalité, difficilement exploitable en l’état. En outre, cette variable partageait des similitudes importantes avec la variable « job_desc_n2 ». Deux transformations complémentaires ont été mises en place :
+
+   - Regroupement fréquentiel (job_42_regroupe) : les professions les plus rares (≤ 500 occurrences) ont été regroupées dans des catégories voisines afin de préserver la stabilité statistique tout en conservant un certain niveau de détail. Une première analyse d’erreurs des faux positifs a conduit à ajuster « job_42_regroupe » pour mieux isoler certaines professions surreprésentées.
+
+   - Regroupement sémantique (job_42_categorie_simplifiee) : une version à 7 grandes familles socioprofessionnelles, s'appuyant sur les fichiers csv complémentaires, a été construite à partir des fichiers csv complémentaires, sur des critères sociologiques et linguistiques, afin d’optimiser les performances de modélisation et les temps de calcul.
+
+L'analyse de la matrice de correspondance entre les deux regroupements tend à confirmer leur complémentarité : « job_42_categorie_simplifiee » assure une bonne cohérence avec les regroupements sémantiques standards, tandis que « job_42_regroupe » conserve une finesse d’analyse utile pour l’interprétation des résultats. Ces deux variables ont donc été conservées conjointement dans le jeu de données d’entraînement.
+
+En complément, la variable « job_desc », peu exploitable également en raison du nombre de modalités, a été restructurée via un mapping à trois niveaux hiérarchiques (N3, N2, N1) obtenu à partir des fichiers « code_job_desc_map.csv », « code_job_desc_n1.csv » et « code_job_desc_n2.csv ». Cette opération a permis de dériver les variables « job_desc_n1 » et « job_desc_n2 », offrant ainsi une lecture plus agrégée des libellés métiers.
+
+2. L'enrichissement géographique et le calcul des distances.
+   
+La variable “insee_code”, trop fine en l’état, a été transformée pour générer des variables synthétiques exploitables : “Region”, “Nom_departement” et “Municipality_type”.
+Deux variables continues clés ont été construites :
+
+   - « distance_job_km » : distance géodésique entre le lieu de résidence actuel et le département d’emploi (actifs) ;
+
+   - « distance_former_km » : distance entre le lieu de résidence actuel et l’ancien lieu d’emploi (retraités).
+
+La distribution de ces distances révèle des profils contrastés : les distances « actuelles » sont concentrées autour de 10–50 km, tandis que les distances post-emploi sont souvent supérieures à 200 km. Une visualisation cartographique des flux, même faiblement peuplés, a mis en évidence des dynamiques nettes : mobilité post-emploi fréquente, avec des pôles d’attractivité dans le sud et l’ouest du pays.
+
+Ces constats ont conduit à intégrer ces deux variables dans le jeu d’entraînement, tant pour leur valeur prédictive potentielle que pour leur intérêt d’interprétation sociogéographique. Des versions catégorielles en quatre classes ont également été dérivées en version catégorielle (ex. : « < 10 km », « 10–50 km », etc.), facilitant certaines visualisations et comparaisons intergroupes, notamment pour l’analyse exploratoire des profils de mobilité.
+
+En complément, une analyse statistique et graphique des variables numériques a été réalisée afin de détecter d’éventuelles anomalies ou valeurs aberrantes. Les distributions observées (âge, rémunération, pension, heures travaillées, distances domicile-travail) sont globalement cohérentes avec les attentes socio-économiques du jeu de données. Des valeurs extrêmes ont été identifiées, notamment sur les variables « Remuneration » et « retirement_pay », mais elles correspondent à des profils plausibles (ex. : cadres très rémunérés). En l’absence d’anomalies structurelles manifestes, aucune transformation spécifique n’a été jugée nécessaire, ces valeurs pouvant contenir une information utile à la modélisation.
+
+In fine, le jeu final a été consolidé selon plusieurs étapes :
+
+   - Harmonisation : uniformisation des identifiants (Unique_id) pour assurer les jointures entre les différents fichiers.
+
+   - Nettoyage : suppression des variables inexploitables ou devenues redondantes (« insee_code », « job_desc », etc.).
+
+   - Fusion : intégration des variables géographiques dans le jeu principal.
+
+   - Génération : création de la variable « Statut » pour distinguer les actifs des retraités, prérequis pour une modélisation segmentée.
+
+
+
+# Sélection préalable des variables et choix du modèle prédictif
+
+## Sélection des variables
+La sélection des variables s’est appuyée, en particulier, sur une double approche analytique :
+
+   - quantitative, via l’information mutuelle, calculée séparément pour les actifs, les retraités et l’ensemble global ;
+
+   - qualitative, via l’analyse de redondances (Cramér’s V) et la pertinence métier.
+
+Les variables conservées doivent ainsi maximiser l’information utile tout en limitant les chevauchements. Par exemple, le regroupement sémantique « job_42_regroupe » a été préféré à des variantes trop fines ou trop corrélées entre elles (comme « job_desc_n1 » et « job_desc_n2 »).
+
+Les variables quasi constantes, comme « Job_categor », présente à plus de 95 % dans une seule modalité, ont été écartées, tout comme certaines variables fortement redondantes (par exemple : « Departement », très corrélé à « Region »).
+
+Ces analyses, croisées à différents tests de performance, ont conduit à l’exclusion des variables suivantes dans l'entraînement des modèles : « job_desc_n1 », « job_desc_n2 », « Activity_type », « Region », « Job_categor », « retirement_age » et « former_job_42 ».
+
+## Pipelines de prétraitement
+En vue de construire des pipelines de prétraitement efficaces pour l'entraînement des modèles, une sélection différenciée a été opérée selon le statut actif/retraité, en tenant compte de la distribution des variables, de leur pouvoir prédictif et du taux de complétion observé.
+
+Certaines variables ont ainsi été conservées uniquement dans un segment. Par exemple : « distance_job_km » chez les actifs, « retirement_age » ou « retirement_pay » chez les retraités.
+D’autres ont été retenues dans les deux modèles du fait de leur valeur transversale, comme « Qualification », « Municipality_type » ou « Contract_type ».
+
+Cette structure a permis la mise en place de pipelines segmentées, conçues respecter les particularités statistiques et contextuelles (logique métier) propres à chaque sous-population.
+
+Je ne suis pas parvenu à trouver des données externes convaincantes. Dans ce contexte, j’ai ainsi choisi d’imputer les variables numériques sensibles, comme « Remuneration » chez les actifs ou « retirement_pay » chez les retraités, par KNN afin de préserver les proximités structurelles entre individus. Ce choix vise à limiter la distorsion des distributions et à préserver les corrélations locales, susceptibles de porter un signal fort pour la prédiction, notamment dans le cas de variables très discriminantes au regard de la variable cible.
+
+À l’inverse, certaines variables numériques comme les distances géographiques ont été imputées par valeur constante (0), non pas comme une approximation, mais comme un signal explicite d’absence d’information pertinente - par exemple, la distance domicile-emploi pour un retraité.
+
+Pour les variables catégorielles, une imputation par libellés explicites (« Non concerné » ou « Inconnu ») a été privilégiée. Ce choix permet de conserver une interprétabilité complète après encodage one-hot, sans perte d'information ni création de modalités ambigües.
+En complément, des flags binaires ont été ajoutés pour certaines variables clés, comme « Remuneration_missing » ou « retirement_pay_missing ». L’objectif est de capter le signal potentiel porté par la présence même d’une valeur manquante, parfois révélateur d’une logique de sous-déclaration, d’inadéquation de la variable, ou d’un profil atypique.
+Ces flags ont ainsi pour but d'enrichir la modélisation en ajoutant une dimension métadonnée.
+Enfin, la variable « Statut » a été encodée en binaire, permettant de combiner ou séparer les modèles selon les besoins, tout en assurant une compatibilité optimale dans les tests croisés ou les méta-modèles.
+
+L’ensemble des pipelines a été encapsulé, sauvegardé, et validé, garantissant ainsi un enchaînement sans friction avec les étapes d’entraînement supervisé, et une possible réutilisation en production.
+
+## Choix du modèle prédictif
+Concernant le choix du modèle, différents modèles ont été testés, depuis la régression logistique, utilisée comme modèle de base, jusqu'à des algorithmes plus avancés comme LightGBM. D'autres ont été choisis pour leur complémentarité en termes d’hypothèses inductives. Par exemple, ExtraTrees privilégie une forte diversification des arbres via des splits totalement aléatoires, favorisant la variance au détriment du biais, tandis que Balanced Random Forest applique un rééchantillonnage équilibré afin de mieux gérer les classes déséquilibrées. Cette diversité permet d’exploiter des dynamiques de décision différentes et de limiter les corrélations entre modèles. Pour maximiser les performances de ces modèles, une optimisation des hyperparamètres a été réalisée à l’aide d’Optuna, y compris pour le méta-modèle final. Les meilleurs paramètres ont été conservés pour entraîner les modèles finaux sur l’ensemble des données d’apprentissage disponibles.
+
+Les résultats montrent une amélioration nette des performances avec les modèles boostés, notamment en précision globale, F1-score et AUC-ROC — en particulier pour la classe majoritaire (classe 1). Par exemple, LightGBM atteint un AUC de 0.94 en global, et jusqu’à 0.99 dans l’approche segmentée, avec un bon équilibre entre sensibilité et spécificité. Toutefois, ces performances quasi parfaites dans l’approche différenciée, notamment pour le statut « Retraité » (AUC ≈ 1), soulèvent un possible problématique de surapprentissage.
+
+Ces constats ont conforté l’idée de s’orienter vers une approche par méta-modèle, combinant les prédictions de modèles complémentaires — globaux et segmentés — afin d’exploiter leur diversité informationnelle tout en régulant les excès d’un modèle trop performant localement. L’objectif espéré est de renforcer à la fois la robustesse et la généralisabilité des prédictions sur les données de test.
+
+
+
+
+
+# Méta-modélisation et analyse des performances
+
+
+```{python}
+#| label: importations-des-bibliotheques
+#| echo: false
+#| warning: false
+#| message: false
+#| output: false
+
+# Librairies standard
+import os
+import sys
+
+# Librairies scientifiques
+import numpy as np
+import pandas as pd
+
+# Visualisation
+import matplotlib.pyplot as plt
+import seaborn as sns
+import shap
+from IPython.display import display, Markdown
+
+# Scikit-learn
+from sklearn.calibration import calibration_curve
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import (
+    brier_score_loss,
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay,
+    f1_score,
+    log_loss,
+    PrecisionRecallDisplay,
+    roc_auc_score,
+    roc_curve
+)
+
+# Sauvegarde / chargement de modèles
+import joblib
+```
+
+
+```{python}
+#| label: import-module-pretraitement-global
+#| echo: false
+#| warning: false
+#| message: false
+#| output: false
+
+# chemin complet vers le dossier
+sys.path.append(r"C:/Users/vince/Documents/Université PSL/Paris_Dauphine-PSL/Apprentissage_supervisé/Projet/donnees_projet_apprentissage_supervise")
+
+# Import des fonctions
+from pretraitement_global import (
+    load_data,
+    prepare_data,
+    harmoniser_data_test,
+    build_global_preprocessor
+)
+```
+
+
+```{python}
+#| label: chargement-donnees-modeles-calibres-et-predictions-oof
+#| echo: false
+#| warning: false
+#| message: false
+#| output: false
+
+# Chemin vers le dossier contenant les fichiers : matrices et vecteurs sauvegardés, modèles calibrés, OOF sauvegardées
+_, chemin_final = load_data()
+
+if chemin_final.startswith("http"):
+    raise ValueError("❌ Les fichiers .pkl et .npy ne sont pas accessibles via GitHub. Veuillez exécuter en local.")
+else:
+    X_stack_actifs = pd.read_pickle(os.path.join(chemin_final, "X_stack_actifs.pkl"))
+    X_stack_retraites = pd.read_pickle(os.path.join(chemin_final, "X_stack_retraites.pkl"))
+    y_actifs = pd.read_pickle(os.path.join(chemin_final, "y_actifs.pkl"))
+    y_retraites = pd.read_pickle(os.path.join(chemin_final, "y_retraites.pkl"))
+
+    model_actifs = joblib.load(os.path.join(chemin_final, "meta_modele_actifs.pkl"))
+    model_retraites = joblib.load(os.path.join(chemin_final, "meta_modele_retraites.pkl"))
+
+    y_proba_oof_actifs = np.load(os.path.join(chemin_final, "y_proba_oof_actifs.npy"))
+    y_proba_oof_retraites = np.load(os.path.join(chemin_final, "y_proba_oof_retraites.npy"))
+
+    print("✅ Données et modèles chargés avec succès.")
+```
+
+
+```{python}
+#| label: preparation-donnees-et-correlation-oof
+#| echo: false
+#| warning: false
+#| message: false
+#| output: false
+
+from pretraitement_global import (
+    load_data,
+    prepare_data,
+    harmoniser_data_test,
+    build_global_preprocessor
+)
+
+# Chargement du jeu de données complet
+df, chemin_base = load_data("jeu_donnees_final.csv")
+df_test_raw, _ = load_data("jeu_donnees_final_test.csv")
+df_test = harmoniser_data_test(df_test_raw)
+
+# Chargement des prédictions OOF - Globales
+oof_reglog        = np.load(os.path.join(chemin_base, "oof_pred_reglog.npy"))
+oof_nbayes        = np.load(os.path.join(chemin_base, "oof_pred_nbayes.npy"))
+oof_lgbm          = np.load(os.path.join(chemin_base, "oof_pred_lgbm.npy"))
+oof_extratrees    = np.load(os.path.join(chemin_base, "oof_pred_extratrees.npy"))
+oof_balanced_rf   = np.load(os.path.join(chemin_base, "oof_pred_brf.npy"))
+
+# Ajout dans un DataFrame
+df_global = pd.DataFrame({
+    "OOF_RegLog": oof_reglog,
+    "OOF_Nbayes_global": oof_nbayes,
+    "OOF_LGBM_global": oof_lgbm,
+    "OOF_ExtraTrees": oof_extratrees,
+    "OOF_Balanced_RF": oof_balanced_rf
+}, index=df.index)
+
+# Corrélation globale
+sns.heatmap(df_global.corr(), annot=True, cmap="coolwarm")
+plt.title("Corrélation – Modèles globaux (OOF)")
+plt.tight_layout()
+plt.show()
+
+# Chargement OOF segmentées
+oof_actifs = np.load(os.path.join(chemin_base, "oof_pred_actifs.npy"))
+oof_retraites = np.load(os.path.join(chemin_base, "oof_pred_retraites.npy"))
+
+# Ajout des modèles optimisés si présents
+try:
+    oof_lgbm_optuna_actifs = np.load(os.path.join(chemin_base, "oof_pred_lgbm_optuna_actifs.npy"))
+    oof_lgbm_optuna_retraites = np.load(os.path.join(chemin_base, "oof_pred_lgbm_optuna_retraites.npy"))
+    optuna_present = True
+except FileNotFoundError:
+    optuna_present = False
+
+# Séparation des groupes
+df_actifs = df[df["Statut"] == "Actif"].copy()
+df_retraites = df[df["Statut"] == "Retraité"].copy()
+
+# Ajout des OOF dans chaque sous-ensemble
+df_actifs["OOF_segmenté"] = oof_actifs
+df_retraites["OOF_segmenté"] = oof_retraites
+
+for df_sub in [df_actifs, df_retraites]:
+    for col in df_global.columns:
+        df_sub[col] = df_global.loc[df_sub.index, col]
+
+    # Ajout optuna si disponible
+    if optuna_present:
+        if df_sub is df_actifs:
+            df_sub["OOF_LGBM_Optuna"] = oof_lgbm_optuna_actifs[df_sub.index]
+        else:
+            df_sub["OOF_LGBM_Optuna"] = oof_lgbm_optuna_retraites[df_sub.index]
+
+# Fonction utilitaire pour la corrélation
+def tracer_corr(df, colonnes, titre):
+    corr = df[colonnes].corr()
+    print(f"\n Matrice de corrélation – {titre} :")
+    print(corr)
+    sns.heatmap(corr, annot=True, cmap="coolwarm")
+    plt.title(f"Corrélation – {titre}")
+    plt.tight_layout()
+    plt.show()
+
+# Visualisation
+colonnes_communes = ["OOF_RegLog", "OOF_Nbayes_global", "OOF_LGBM_global", "OOF_ExtraTrees", "OOF_Balanced_RF", "OOF_segmenté"]
+if optuna_present:
+    colonnes_communes.append("OOF_LGBM_Optuna")
+
+tracer_corr(df_actifs, colonnes_communes, "Actifs")
+tracer_corr(df_retraites, colonnes_communes, "Retraités")
+```
+
+
+## Matrices des correlations des prédictions OOF
+
+
+```{python}
+#| label: matrices-correlation-oof
+#| echo: false
+#| warning: false
+#| message: false
+
+# Définition des colonnes
+colonnes_communes = ["OOF_RegLog", "OOF_Nbayes_global", "OOF_LGBM_global", "OOF_ExtraTrees", "OOF_Balanced_RF", "OOF_segmenté"]
+if optuna_present:
+    colonnes_communes.append("OOF_LGBM_Optuna")
+
+# Création d'une figure à 3 sous-graphes
+fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+# Corrélation globale
+corr_globale = df_global.corr()
+sns.heatmap(corr_globale, annot=True, cmap="coolwarm", ax=axes[0])
+axes[0].set_title("Corrélation – Modèles globaux", color='navy')
+
+# Corrélation actifs
+corr_actifs = df_actifs[colonnes_communes].corr()
+sns.heatmap(corr_actifs, annot=True, cmap="coolwarm", ax=axes[1])
+axes[1].set_title("Corrélation – Actifs", color='navy')
+
+# Corrélation retraités
+corr_retraites = df_retraites[colonnes_communes].corr()
+sns.heatmap(corr_retraites, annot=True, cmap="coolwarm", ax=axes[2])
+axes[2].set_title("Corrélation – Retraités", color='navy')
+
+plt.tight_layout()
+plt.show()
+```
+
+
+Les matrices des corrélations entre prédictions out-of-fold (OOF) soulignent des différences nettes entre les modèles selon les sous-populations — actifs vs retraités. Les comportements des modèles sont parfois cohérents (fortement corrélés), parfois très divergents (faiblement corrélés), ce qui suggère des dynamiques d’apprentissage différentes selon les profils. Face à ces constats, le modèle a été construit de manière à :
+
+- construire deux méta-modèles séparés, chacun spécialisé selon le statut socio-économique ;
+
+- intégrer explicitement la variable « Statut » dans chaque méta-modèle pour en préserver la trace structurelle.
+
+Cette architecture permet de spécialiser l’agrégation des prédictions tout en conservant une cohérence globale du système de décision.
+
+Pour chaque sous-population, les prédictions de plusieurs modèles ont été combinées de manière différenciée, sur la base de deux critères principaux :
+- la performance individuelle de chaque modèle sur le segment concerné,
+- sa complémentarité structurelle, mesurée par sa corrélation avec les autres prédicteurs (OOF).
+
+Les modèles conservés dans les matrices de stacking sont donc ceux qui apportaient à la fois un signal informatif et une diversité utile.
+
+Chez les actifs, les modèles retenus comprennent la régression logistique, le modèle LightGBM, ExtraTrees, la forêt aléatoire pondérée (Balanced Random Forest) ainsi que le modèle segmenté. La régression logistique a été conservée pour son bon calibrage et sa robustesse, fournissant une base linéaire stable dans la combinaison. Le modèle LightGBM s’est imposé comme le plus performant sur ce segment, avec les meilleurs scores en AUC et F1-score, constituant le cœur du signal prédictif. Les modèles ExtraTrees et Balanced Random Forest apportent une diversification utile : le premier par des splits aléatoires favorisant la variance, le second par sa capacité à gérer efficacement le déséquilibre entre classes, ce qui est un des points d'attention du fait du léger déséquilibre présente dans la distribution de la variable cible. Le modèle segmenté, entraîné exclusivement sur la population active, a été intégré pour enrichir la prédiction par un signal spécialisé. En revanche, le modèle Naive Bayes a été écarté dans ce segment. Bien qu’il génère parfois un signal orthogonal utile en stacking, ses performances individuelles se sont révélées nettement inférieures (AUC = 0.76), avec une expressivité limitée et une corrélation faible avec la cible. De plus, son rappel élevé sur la classe 0 se paie par une chute importante de précision, ce qui introduit un grand nombre de faux positifs. Dans un segment où les autres modèles offrent déjà un excellent équilibre entre sensibilité et précision, ce déséquilibre aurait risqué de détériorer la qualité globale des prédictions. Il a donc été jugé qu’il n’apportait ni gain informationnel suffisant, ni complémentarité stratégique justifiant son inclusion dans la combinaison finale.
+
+Chez les retraités, la sélection finale a inclus ces mêmes modèles de base, mais avec le maintien du Naive Bayes. Comme pour les actifs, la régression logistique apporte un socle interprétable, avec des résultats corrects sur les deux classes. LightGBM domine largement en termes de performance sur cette population. ExtraTrees et Balanced Random Forest ont été retenus pour leur capacité à diversifier le signal, en s’appuyant sur des partitions distinctes et une logique de pondération utile face à l’hétérogénéité de la population retraitée. Le modèle segmenté retraités, malgré ses performances quasi parfaites, a été intégré avec précaution dans le stacking, afin de profiter de sa finesse sans risquer une surspécialisation. Enfin, le modèle Naive Bayes a été conservé spécifiquement dans ce segment, non pour ses performances brutes, mais pour sa très faible corrélation avec les autres modèles - quasi inexistante sur ce segment. Ce caractère orthogonal en fait un candidat intéressant dans une logique d’agrégation. De plus, contrairement au cas des actifs, son rappel élevé sur la classe 0 s’accompagne ici d’une dégradation de la précision moins risquée du fait, notamment, de la performance très solide du modèle différencié sur ce segment, ce qui limite le risque de perturbation du modèle global. Sa présence pourrait ainsi permettre au méta-modèle de disposer d’un signal complémentaire, potentiellement utile pour discriminer certains profils marginaux ou atypiques. Sa contribution reste en outre régulée par le stacking, afin d’éviter que ses faiblesses sur la classe positive n’altèrent la performance globale.
+
+Cette stratégie de sélection différenciée a pour but de maximiser la complémentarité fonctionnelle entre les modèles, tout en respectant les dynamiques propres à chaque groupe. Elle devrait renforcer la capacité du méta-modèle à généraliser de manière robuste, sans sacrifier la sensibilité spécifique à chaque sous-population.
+
+## Recherche des F1-score optimaux
+
+```{python}
+#| label: rechercher-seuils-F1score-optimaux
+#| echo: false
+#| warning: false
+#| message: false
+
+# Fonction pour rechercher le seuil F1 optimal
+def seuil_f1_optimal(y_observe, y_proba):
+    seuils = np.linspace(0.05, 0.95, 400)
+    scores_f1 = [f1_score(y_observe, y_proba > s) for s in seuils]
+    indice_optimal = np.argmax(scores_f1)
+    meilleur_seuil = seuils[indice_optimal]
+    meilleur_f1 = scores_f1[indice_optimal]
+    return meilleur_seuil, meilleur_f1, seuils, scores_f1
+
+# Recherche du seuil optimal pour les deux groupes
+seuil_opt_actifs, f1_max_actifs, tous_seuils_actifs, tous_scores_actifs = seuil_f1_optimal(y_actifs, y_proba_oof_actifs)
+seuil_opt_retraites, f1_max_retraites, tous_seuils_retraites, tous_scores_retraites = seuil_f1_optimal(y_retraites, y_proba_oof_retraites)
+
+print(f"🔍 Seuil optimal F1 (actifs) : {seuil_opt_actifs:.3f}")
+print(f"✅ F1-score maximal obtenu : {f1_max_actifs:.4f}")
+
+print(f"🔍 Seuil optimal F1 (retraités) : {seuil_opt_retraites:.3f}")
+print(f"✅ F1-score maximal obtenu : {f1_max_retraites:.4f}")
+
+# Affichage côte à côte
+fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+# Courbe Actifs
+axes[0].plot(tous_seuils_actifs, tous_scores_actifs, label="Score F1")
+axes[0].axvline(seuil_opt_actifs, color="r", linestyle="--", label=f"Seuil optimal = {seuil_opt_actifs:.2f}")
+axes[0].set_title("Courbe F1 selon le seuil – Actifs", color='navy')
+axes[0].set_xlabel("Seuil de décision")
+axes[0].set_ylabel("Score F1")
+axes[0].legend()
+axes[0].grid(True)
+
+# Courbe Retraités
+axes[1].plot(tous_seuils_retraites, tous_scores_retraites, label="Score F1")
+axes[1].axvline(seuil_opt_retraites, color="r", linestyle="--", label=f"Seuil optimal = {seuil_opt_retraites:.2f}")
+axes[1].set_title("Courbe F1 selon le seuil – Retraités", color='navy')
+axes[1].set_xlabel("Seuil de décision")
+axes[1].set_ylabel("Score F1")
+axes[1].legend()
+axes[1].grid(True)
+
+plt.tight_layout()
+plt.show()
+```
+
+
+Afin d’améliorer la performance finale des méta-modèles, une recherche du seuil de décision optimal a été menée séparément pour les actifs et les retraités, à partir des prédictions out-of-fold. Cette étape vise à maximiser le F1-score, pour sa capacité à équilibrer la précision et le rappel. Ce choix est privilégié ici, car dans un contexte de classes déséquilibrées, l’accuracy peut se révéler trompeuse car trop optimiste, et l’AUC ne pas suffisamment traduire directement la performance réelle d’un seuil de décision particulier. Le F1-score, en tant que moyenne harmonique, devrait permettre de privilégier une détection efficace des cas positifs tout en pénalisant plus fortement les déséquilibres entre précision et rappel.
+
+Chez les actifs, le seuil optimal maximisant le F1-score s’établit à 0.42, avec un score maximal de 0.9019. La courbe présente une asymétrie modérée, montrant que le seuil canonique de 0.5 (i.e. la valeur par défaut utilisée pour transformer une probabilité en décision binaire) n’est pas adapté ici. Le choix d’un seuil plus bas reflète une volonté d’améliorer la sensibilité du modèle dans un segment où la classe minoritaire est plus difficile à détecter.
+
+Chez les retraités, la courbe du F1-score est plus régulière, avec un maximum atteint pour un seuil légèrement supérieur, à 0.54, et un F1-score maximal de 0.9315. Cette proximité avec le seuil de 0.5 suggère une meilleure séparation des classes dans les distributions de probabilités : le modèle semble distinguer plus nettement les cas positifs des cas négatifs, rendant l’ajustement du seuil moins critique.
+
+Cette étape d’optimisation devrait ainsi permettre d’ajuster plus finement la stratégie de décision du méta-modèle global, en tenant compte des spécificités de chaque sous-population. En adaptant le seuil selon le profil de chaque individus (actif ou retraité), elle vise à améliorer l’équilibre des prédictions, leur cohérence interne, et la pertinence opérationnelle des décisions automatisées qui en découleront en production.
+
+## Métriques finales – stacking calibré sur F1-score optimaux
+
+```{python}
+#| label: Évaluation-meta-modèle-segmenté-avec-seuils-optimaux_F1score
+#| echo: false
+#| warning: false
+#| message: false
+
+# ============================================
+# Seuils optimaux F1-score
+# ============================================
+seuil_opt_actifs = 0.424
+seuil_opt_retraites = 0.537
+
+# ============================================
+# Prédictions (probabilités et binaires)
+# ============================================
+proba_actifs = model_actifs.predict_proba(X_stack_actifs)[:, 1]
+proba_retraites = model_retraites.predict_proba(X_stack_retraites)[:, 1]
+
+pred_actifs = (proba_actifs >= seuil_opt_actifs).astype(int)
+pred_retraites = (proba_retraites >= seuil_opt_retraites).astype(int)
+
+# Global (concaténation)
+y_reel_global = pd.concat([y_actifs, y_retraites])
+y_proba_global = pd.concat([
+    pd.Series(proba_actifs, index=y_actifs.index),
+    pd.Series(proba_retraites, index=y_retraites.index)
+])
+y_pred_global = pd.concat([
+    pd.Series(pred_actifs, index=y_actifs.index),
+    pd.Series(pred_retraites, index=y_retraites.index)
+])
+
+# ============================================
+# Fonction d’extraction des indicateurs
+# ============================================
+def extraire_resume_complet(y_true, y_pred, y_proba, label):
+    rapport = classification_report(y_true, y_pred, output_dict=True)
+    cm = confusion_matrix(y_true, y_pred)
+    
+    # Spécificité = TN / (TN + FP)
+    tn, fp, fn, tp = cm.ravel()
+    specificite = tn / (tn + fp) if (tn + fp) > 0 else np.nan
+    
+    return {
+        "Statut": label,
+        "Accuracy": round(rapport["accuracy"], 3),
+        "Précision (1)": round(rapport["1"]["precision"], 3),
+        "Sensibilité / Rappel (1)": round(rapport["1"]["recall"], 3),
+        "Spécificité (0)": round(specificite, 3),
+        "F1-score (1)": round(rapport["1"]["f1-score"], 3),
+        "F1 pondéré": round(rapport["weighted avg"]["f1-score"], 3),
+        "AUC": round(roc_auc_score(y_true, y_proba), 3)
+    }
+
+# ============================================
+# Matrices de confusion
+# ============================================
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+matrices = [
+    confusion_matrix(y_actifs, pred_actifs),
+    confusion_matrix(y_retraites, pred_retraites),
+    confusion_matrix(y_reel_global, y_pred_global)
+]
+
+titres = [
+    "Actifs (optimisé seuil F1)",
+    "Retraités (optimisé seuil F1)",
+    "Global (optimisé seuils F1 différenciés)"
+]
+
+for ax, cm, titre in zip(axes, matrices, titres):
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp.plot(ax=ax, cmap="Blues", colorbar=False)
+    ax.set_title(f"Matrice de confusion — {titre}", color='navy')
+    ax.grid(False)
+
+plt.tight_layout()
+plt.show()
+
+# ============================================
+# Courbes ROC avec AUC
+# ============================================
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+for ax, y_true, y_score, titre in zip(
+    axes,
+    [y_actifs, y_retraites, y_reel_global],
+    [proba_actifs, proba_retraites, y_proba_global],
+    ["Actifs", "Retraités", "Global"]
+):
+    fpr, tpr, _ = roc_curve(y_true, y_score)
+    auc = roc_auc_score(y_true, y_score)
+    ax.plot(fpr, tpr, label=f"AUC = {auc:.3f}")
+    ax.plot([0, 1], [0, 1], "--", color="gray")
+    ax.set_title(f"Courbe ROC — {titre}", color='navy')
+    ax.set_xlabel("1 - Spécificité")
+    ax.set_ylabel("Sensibilité")
+    ax.legend()
+    ax.grid(True)
+
+plt.tight_layout()
+plt.show()
+
+# ============================================
+# Résumé comparatif des performances
+# ============================================
+ligne_actifs = extraire_resume_complet(y_actifs, pred_actifs, proba_actifs, "Actifs")
+ligne_retraites = extraire_resume_complet(y_retraites, pred_retraites, proba_retraites, "Retraités")
+ligne_global = extraire_resume_complet(y_reel_global, y_pred_global, y_proba_global, "Global")
+
+df_eval_comparative = pd.DataFrame([ligne_actifs, ligne_retraites, ligne_global])
+
+# Mise en forme
+df_affichage = df_eval_comparative.set_index("Statut").round(3).rename(columns={
+    "Accuracy": "Exactitude",
+    "Précision (1)": "Précision",
+    "Sensibilité / Rappel (1)": "Rappel",
+    "Spécificité (0)": "Spécificité",
+    "F1-score (1)": "F1-score",
+    "F1 pondéré": "F1 pondéré",
+    "AUC": "AUC"
+})
+
+display(
+    df_affichage.style
+    .set_table_styles([
+        {"selector": "th", "props": [("text-align", "center"), ("border-bottom", "1px solid black")]},
+        {"selector": "td", "props": [("text-align", "center")]}
+    ])
+    .set_properties(**{"font-size": "10pt"})
+)
+```
+
+
+L’évaluation finale des méta-modèles segmentés, après calibration des seuils optimaux du F1-score, met en évidence un équilibre solide, aussi bien au niveau individuel (actifs et retraités) que global.
+
+Chez les actifs, le modèle atteint un F1-score de 0.91, avec une précision de 0.88 et un rappel de 0.93. Cette configuration traduit une très bonne capacité à détecter les cas positifs tout en limitant les erreurs. Le score de spécificité (0.78) reste modéré mais acceptable, en cohérence avec le seuil optimisé à 0.424 qui favorise la sensibilité. Le modèle assume ainsi un compromis stratégique : tolérer davantage de faux positifs sur la classe 0 pour maximiser la détection des cas pertinents, dans un segment où la classe positive est majoritaire.
+
+Chez les retraités, les résultats sont encore plus convaincants. Le modèle atteint un F1-score de 0.96, avec une précision de 0.94 et un rappel de 0.97, traduisant une excellente régularité dans la détection des cas positifs. La spécificité de 0.72, légèrement inférieure à celle des actifs, est compensée par la très forte sensibilité du modèle. Cette configuration témoigne d’une séparation claire entre les classes dans l’espace des probabilités prédictives, facilitant l’arbitrage par seuil et renforçant l’efficacité de la combinaison des modèles sous-jacents.
+
+La fusion des prédictions segmentées, avec seuils optimisés pour chaque groupe, conduit à un F1-score global de 0.92, une accuracy de 0.89, et une AUC de 0.96. La sensibilité globale atteint 0.95, confirmant la capacité du système à capter efficacement les cas positifs. La spécificité, quant à elle, s’établit à 0.77, cohérente avec les arbitrages opérés localement dans chaque segment.
+
+Les matrices de confusion et les courbes ROC illustrent visuellement cette dynamique : les erreurs sont bien réparties, sans déséquilibre majeur, et la zone sous la courbe reste élevée dans les trois cas, gage d’une forte capacité de discrimination.
+
+L’ensemble de ces résultats met en évidence les gains substantiels permis par la segmentation statutaire et la calibration fine des seuils de décision :
+
+- La régression logistique seule, bien que robuste et bien calibrée, plafonnait à un F1-score de 0.87 pour la classe positive, avec une spécificité limitée à 0.58 sur la classe minoritaire. Ce niveau relativement bas de spécificité traduisait une tendance marquée à la surdétection des cas positifs — autrement dit, une production excessive de faux positifs — malgré un très bon rappel (0.92) sur la classe 1. Ce déséquilibre, symptomatique de l’usage d’un seuil par défaut mal adapté, justifie pleinement la nécessité d’une optimisation différenciée des seuils et d’une modélisation segmentée selon les profils.
+
+- Le modèle LightGBM global offrait déjà une performance plus solide, atteignant un F1-score de 0.91 sur la classe positive, une AUC de 0.94, et un meilleur compromis global. Toutefois, son F1-score pondéré (0.87) et sa spécificité encore modérée (0.74) montraient qu’une marge de progression subsistait, en particulier sur les cas négatifs.
+
+Le passage à une modélisation différenciée par statut — même sans stacking — a permis une nette avancée : le F1-score atteignait 0.95 chez les actifs et 0.99 chez les retraités, avec des AUC très robustes de 0.9897 et 0.9995 respectivement. Ces résultats traduisaient une excellente capacité de discrimination, notamment chez les retraités, où les classes étaient quasi parfaitement séparées.
+
+C’est toutefois l’étape finale, combinant stacking spécialisé par sous-population et optimisation des seuils F1, qui a permis de consolider ces performances et d’en renforcer la robustesse. Le F1-score global atteint désormais 0.92, avec une AUC de 0.96. Surtout, l’équilibre entre sensibilité (0.95) et spécificité (0.77) s’est nettement amélioré, assurant une détection efficace des cas positifs sans compromettre la précision sur les cas négatifs.
+
+Ces progrès reflètent l’apport complémentaire des modèles agrégés, la pertinence de la segmentation et la valeur ajoutée d’une calibration différenciée. L’approche par segmentation, couplée à un ajustement fin des seuils de décision, a permis d’atteindre une performance élevée tout en conservant une cohérence métier et statistique dans le traitement différencié des profils actifs et retraités. En somme, les résultats suggèrent que le système modulaire proposé est robuste, à la fois performant, explicable et adapté aux spécificités des populations cibles.
+
+
+```{python}
+#| label: Evaluation-avancée-des-performances-modèle-stacké-différencié-calibré-par-F1-score-optimaux
+#| echo: false
+#| warning: false
+#| message: false
+
+# Fonction générique
+def evaluer_modele_complet(nom_modele, modele, X, y, seuil=None, couleur='navy', afficher_importance=True):
+    print(f"\n🔍 Évaluation avancée — modèle stacké {nom_modele}")
+
+    # Prédictions de probabilité
+    y_proba = modele.predict_proba(X)[:, 1]
+    
+    # Brier Score & Log Loss (toujours affichés)
+    print(f"🔍 Brier Score : {brier_score_loss(y, y_proba):.4f}")
+    print(f"🔍 Log Loss     : {log_loss(y, y_proba):.4f}")
+
+    # Prédictions binaires si seuil donné
+    y_pred = None
+    if seuil is not None:
+        y_pred = (y_proba >= seuil).astype(int)
+        print(f"✅ Seuil utilisé : {seuil:.3f}")
+
+        # Classification report
+        print("\n Rapport de classification :")
+        print(classification_report(y, y_pred))
+
+    # Courbes : Calibration et Précision-Rappel
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Courbe de calibration
+    prob_true, prob_pred = calibration_curve(y, y_proba, n_bins=10)
+    axes[0].plot(prob_pred, prob_true, marker="o")
+    axes[0].plot([0, 1], [0, 1], "--", color="gray")
+    axes[0].set_xlabel("Prédiction moyenne")
+    axes[0].set_ylabel("Probabilité empirique")
+    axes[0].set_title(f"Calibration — {nom_modele}", color=couleur)
+    axes[0].grid(True)
+
+    # Courbe précision-rappel
+    PrecisionRecallDisplay.from_predictions(y, y_proba, ax=axes[1])
+    axes[1].set_title(f"Courbe Précision-Rappel — {nom_modele}", color=couleur)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Importance par permutation
+    if afficher_importance:
+        try:
+            result = permutation_importance(modele, X, y, n_repeats=10, random_state=42)
+            importances = pd.Series(result.importances_mean, index=X.columns).sort_values()
+            importances.plot(kind="barh", title=f"Importance des variables — permutation ({nom_modele})", color="purple")
+            plt.title(f"Importance des variables — permutation ({nom_modele})", color=couleur)
+            plt.tight_layout()
+            plt.show()
+        except Exception as e:
+            print(f"⚠️ Importance par permutation non affichée : {e}")
+            
+            
+# Génération des résultats
+# Actifs
+evaluer_modele_complet("Actifs", model_actifs, X_stack_actifs, y_actifs, seuil=0.424)
+
+# Retraités
+evaluer_modele_complet("Retraités", model_retraites, X_stack_retraites, y_retraites, seuil=0.537)
+
+# Modèle combiné (sans permutation importance ni seuil)
+class ModeleCombiné:
+    def predict_proba(self, X):
+        y_proba = np.concatenate([
+            model_actifs.predict_proba(X_stack_actifs)[:, 1],
+            model_retraites.predict_proba(X_stack_retraites)[:, 1]
+        ])
+        return np.column_stack([1 - y_proba, y_proba])
+
+# Global combiné
+y_globale = np.concatenate([y_actifs, y_retraites])
+X_globale = pd.concat([X_stack_actifs, X_stack_retraites], axis=0)
+
+evaluer_modele_complet(
+    "Global différencié (calibré)",
+    ModeleCombiné(),
+    X_globale,
+    y_globale,
+    afficher_importance=False
+)
+```
+
+
+En complément, les courbes de calibration montrent une bonne concordance entre les probabilités prédites et les observations réelles, notamment chez les actifs. Cela confirme que le méta-modèle ne se contente pas d’être performant en termes de classification (F1-score, AUC), mais qu’il est également bien calibré, ce qui est essentiel dans toute prise de décision fondée sur un seuil probabiliste. Les scores de Brier faibles (0.084 pour les actifs, 0.057 pour les retraités) ainsi que les valeurs de log loss renforcent cette impression de fiabilité.
+
+Les courbes précision-rappel, quant à elles, permettent de juger plus finement la performance dans un contexte de classes déséquilibrées. Les scores *Average Precision* atteignent 0.97 chez les actifs et 0.99 chez les retraités, traduisant une capacité à maintenir une précision élevée même pour des niveaux de rappel très élevés. En d’autres termes, le système parvient à détecter efficacement un grand nombre de cas positifs sans pour autant dégrader la fiabilité des alertes émises. Ce niveau de performance est particulièrement précieux dans un contexte opérationnel sensible, où les faux positifs représentent un coût, mais où les faux négatifs peuvent avoir des conséquences critiques.
+
+L’analyse par permutation apporte un éclairage sur la contribution différenciée des prédicteurs dans le méta-modèle selon les sous-populations.
+
+- Chez les actifs, le prédicteur segmenté — c’est-à-dire l’agrégation explicite des modèles optimisés localement — s’impose comme le contributeur principal au score final, devant même les meilleurs modèles individuels comme LightGBM. Cela montre que la logique de spécialisation locale est ici ce qui apporte le plus de valeur, probablement en raison de l’hétérogénéité structurelle de cette population.
+
+- Chez les retraités, à l’inverse, c’est le modèle LightGBM qui ressort comme le plus influent, devant le prédicteur segmenté. Cela suggère qu’une structure plus homogène dans cette population permet à un seul modèle puissant de capter l’essentiel du signal, sans nécessiter une spécialisation aussi poussée.
+
+Ce contraste révèle une forme d’adaptation hiérarchique :
+
+- Dans les segments plus complexes ou instables (comme les actifs), c’est l’architecture segmentée qui prend l’ascendant ;
+
+- Tandis que dans les segments plus réguliers (comme les retraités), la domination d’un modèle robuste unique suffit à maintenir une très haute performance.
+
+Ces constats renforcent la légitimité du recours à une architecture de méta-modélisation segmentée : non seulement cette approche exploite au mieux la diversité des prédicteurs, mais elle permet surtout d’adapter finement la logique de décision aux dynamiques propres à chaque population, en combinant spécialisation et agrégation de manière optimale.
+
+
+
+
+# Pour aller plus loin
+
+## Analyse SHAP sur le modèle stacké — Actifs
+
+
+```{python}
+#| label: Analyse-SHAP-modèle-stacké-actifs
+#| echo: false
+#| warning: false
+#| message: false
+
+print("\n Analyse SHAP sur le modèle stacké — Actifs")
+
+# Mmodèle stacké final
+modele_shap = model_actifs
+
+explainer = shap.Explainer(model_actifs, X_stack_actifs, algorithm="tree")
+shap_values = explainer(X_stack_actifs, check_additivity=False)
+
+# Résumé global
+shap.plots.bar(shap_values, max_display=10)
+shap.plots.beeswarm(shap_values, max_display=10)
+
+# Zoom sur un faux positif
+prediction_binaire_actifs  = model_actifs.predict(X_stack_actifs)
+faux_positifs = (y_actifs == 0) & (prediction_binaire_actifs  == 1)
+
+if faux_positifs.any():
+    faux_positifs_idx = np.where(faux_positifs)[0][0]
+    vrai_idx = y_actifs.index[faux_positifs_idx]
+    print(f"\n🔎 Zoom sur un faux positif — index {vrai_idx}")
+    shap.plots.waterfall(shap_values[faux_positifs_idx])
+else:
+    print("✅ Aucun faux positif détecté.")
+```
+
+
+L’analyse SHAP du méta-modèle apporte un éclairage complémentaire sur les dynamiques internes du système, en confirmant l’importance différenciée des prédicteurs selon les segments. Chez les actifs, le prédicteur segmenté domine très nettement en valeur SHAP moyenne, devant les modèles de base comme LGBM ou ExtraTrees. Ce constat renforce l’idée que la spécialisation des modèles, adaptée au statut des individus, constitue la principale source de performance pour cette sous-population hétérogène. Le beeswarm plot montre une forte dispersion des contributions locales, en particulier pour les modèles Segmenté et LGBM. Cette variabilité traduit un comportement adaptatif : le poids relatif de chaque modèle varie sensiblement selon les individus, signe que le méta-modèle ajuste sa décision en fonction des spécificités de chaque profil. Autrement dit, les actifs ne semblent pas suivre un schéma unique, et le système apprend à pondérer les prédicteurs de manière contextuelle. Cette influence se manifeste aussi à l’échelle individuelle, où l’examen d’un faux positif illustre cette dynamique : le prédicteur segmenté oriente fortement vers la classe 0, mais RegLog pousse vers la classe 1, révélant des désaccords internes que le méta-modèle tranche. On observe ainsi une forme de pondération locale, qui ajuste la décision en fonction des signaux dominants.
+
+À l’inverse, chez les retraités (les résultats sont présentés en partie III.f du notebook associé), c’est LGBM qui s’impose comme contributeur principal, y compris en importance SHAP globale. Le modèle segmenté y conserve néanmoins une place significative, traduisant une valeur ajoutée ponctuelle dans certains cas limites. Cette hiérarchie plus aplatie entre prédicteurs reflète une dynamique plus linéaire et moins segmentée, en cohérence avec une population plus stable et homogène. Le beeswarm plot illustre cette cohérence par une dispersion réduite des contributions locales, principalement tirée par LGBM, puis ExtraTrees et le modèle segmenté. Enfin, l’analyse d’un faux positif révèle un cas typique d’arbitrage entre prédicteurs divergents : ici, le modèle LGBM penche vers la classe 0, tandis que RegLog et Segmenté tirent vers la classe 1. Cette configuration illustre la capacité du méta-modèle à combiner des signaux parfois contradictoires, au risque d’erreurs marginales mais structurellement explicables. Ce cas particulier met en évidence un phénomène d’arbitrage structurel au sein du modèle stacké : le prédicteur LGBM, qui domine globalement chez les retraités, peut parfois exercer une influence prépondérante même lorsque d'autres modèles, tels que RegLog ou Segmenté, captent un signal inverse. Dans cet exemple de faux positif, la contribution fortement négative de LGBM tire la prédiction vers la classe 0, neutralisant l’apport positif d’autres prédicteurs. Cela souligne à la fois la puissance du consensus majoritaire dans un stacking, mais aussi ses limites ponctuelles lorsqu’un modèle principal se trompe avec confiance.
+
+L’introduction du prédicteur segmenté ne constitue donc pas uniquement un levier de performance, mais aussi un gain d’interprétabilité. En permettant de mieux comprendre les ressorts décisionnels selon les groupes, elle contribue à une modélisation plus transparente et maîtrisable, essentielle dans des contextes d’aide à la décision.
+
+Cette domination du prédicteur segmenté chez les actifs soulève aussi une piste intéressante : le gain marginal apporté par certains modèles de base étant très faible, il pourrait être pertinent d’explorer des versions simplifiées du méta-modèle, voire des architectures hiérarchisées où seuls les prédicteurs les plus informatifs sont conservés. Une telle démarche permettrait de réduire la complexité sans perte significative de performance, tout en améliorant la stabilité et la rapidité des prédictions.
+
+## Exemple d'analyse de faux positif — Actifs
+
+
+```{python}
+#| label: Exemple-analyse-des-faux-positifs
+#| echo: false
+#| warning: false
+#| message: false
+
+# Exemple d’analyse des faux positifs : analyse par statut et catégorie de métier
+
+# ===============================================
+# Paramètres des seuils optimaux (F1-score)
+# ===============================================
+seuil_optimal_actifs = 0.424
+seuil_optimal_retraites = 0.537
+
+
+# ============================
+# Faux positifs — ACTIFS
+# ============================
+proba_predites_actifs = model_actifs.predict_proba(X_stack_actifs)[:, 1]
+prediction_binaire_actifs = (proba_predites_actifs >= seuil_optimal_actifs).astype(int)
+faux_positifs_actifs = (y_actifs == 0) & (prediction_binaire_actifs == 1)
+
+# Affichage du nombre de cas
+nb_fp_actifs = faux_positifs_actifs.sum()
+print(f"🔍 Nombre de faux positifs (actifs) : {nb_fp_actifs}")
+
+# Reconstruction des index et sous-dataframes
+df_train = pd.concat([X_stack_actifs, X_stack_retraites])
+df_train["job_42_regroupe"] = df[["job_42_regroupe"]].loc[df_train.index]
+
+indices_actifs = X_stack_actifs.index
+indices_retraites = X_stack_retraites.index
+
+# Extraction des individus concernés
+faux_positifs_df_actifs = df_train.loc[indices_actifs[faux_positifs_actifs]]
+
+# Visualisation par métier
+plt.figure(figsize=(10, 4))
+sns.countplot(
+    data=faux_positifs_df_actifs,
+    y="job_42_regroupe",
+    order=faux_positifs_df_actifs["job_42_regroupe"].value_counts().index
+)
+plt.title(f"Faux positifs par métier — Actifs (n = {nb_fp_actifs})", color="navy")
+plt.xlabel("Nombre de faux positifs")
+plt.tight_layout()
+plt.show()
+
+
+# ================================
+# Faux positifs — RETRAITÉS
+# ================================
+proba_predites_retraites = model_retraites.predict_proba(X_stack_retraites)[:, 1]
+prediction_binaire_retraites = (proba_predites_retraites >= seuil_optimal_retraites).astype(int)
+faux_positifs_retraites = (y_retraites == 0) & (prediction_binaire_retraites == 1)
+
+# Affichage du nombre de cas
+nb_fp_retraites = faux_positifs_retraites.sum()
+print(f"🔍 Nombre de faux positifs (retraités) : {nb_fp_retraites}")
+
+# Extraction des individus concernés
+faux_positifs_df_retraites = df_train.loc[indices_retraites[faux_positifs_retraites]]
+
+# Visualisation par métier
+plt.figure(figsize=(10, 4))
+sns.countplot(
+    data=faux_positifs_df_retraites,
+    y="job_42_regroupe",
+    order=faux_positifs_df_retraites["job_42_regroupe"].value_counts().index
+)
+plt.title(f"Faux positifs par métier — Retraités (n = {nb_fp_retraites})", color="navy")
+plt.xlabel("Nombre de faux positifs")
+plt.tight_layout()
+plt.show()
+```
+
+
+Enfin, l’analyse des faux positifs ouvre des pistes précieuses pour le perfectionnement du système. Chez les actifs, les 2 889 faux positifs sont fortement concentrés dans certains profils professionnels : élèves, étudiants, personnes sans activité professionnelle apparente ou métiers administratifs intermédiaires. Ces cas suggèrent soit une ambiguïté structurelle - par exemple des transitions non captées -, soit des limites dans les variables observées. Chez les retraités, les 625 faux positifs se répartissent de manière similaire, notamment parmi les anciens employés et ouvriers, indiquant une continuité possible des biais de prédiction entre générations professionnelles.
+
+Le fait que ces erreurs se concentrent sur un nombre restreint de catégories invite à des ajustements ciblés. Parmi les pistes envisagées : l’enrichissement du jeu de données avec des variables de trajectoire ou de contexte, l’intégration d’informations temporelles sur les transitions professionnelles, ou encore l’entraînement de modèles spécifiques sur les segments les plus ambigus. Ces améliorations pourraient permettre d’affiner la granularité de la prédiction, en traitant mieux les zones grises identifiées. 
+L’exploration plus systématique d’autres cas de faux positifs, au-delà de l’exemple illustré ici, permettrait également d’identifier des motifs récurrents ou des facteurs de confusion non modélisés, enrichissant encore la compréhension fine du comportement du système dans ses zones de fragilité.
+
+Au-delà, les analyses SHAP menées sur le méta-modèle ont révélé une hétérogénéité marquée dans les contributions locales des prédicteurs, tant entre les segments de population — actifs vs retraités — qu’au sein même de chaque groupe. Ces dynamiques suggèrent que la performance du modèle repose non seulement sur la qualité des prédicteurs de base, mais aussi sur la capacité du système à ajuster leur pondération selon le profil de l’individu.
+Dans cette perspective, il pourrait être intéressant d’envisager un stacking adaptatif, dans lequel les poids attribués aux prédicteurs de base ne seraient plus fixes, mais appris dynamiquement en fonction des caractéristiques d’entrée. Concrètement, cela reviendrait à remplacer le méta-modèle par une fonction de pondération paramétrique. Cette dernière, mise en œuvre, par exemple, par un petit réseau de neurones ou une combinaison linéaire suivie d’un softmax, prendrait en entrée les variables descriptives de l’individu et produirait un ensemble de coefficients $\alpha_k(x)$, chacun associé à un modèle de base $k$.
+Ces coefficients, normalisés pour former une distribution de poids, détermineraient alors la contribution de chaque prédicteur à la prédiction finale, de façon spécifique à chaque individu. Autrement dit, au lieu d’utiliser une combinaison fixe des modèles comme dans un stacking classique, le système ajusterait automatiquement les pondérations selon les profils, en donnant plus de poids aux modèles les plus pertinents dans un contexte donné.
+Cette approche, analogue à un mécanisme d’attention, permettrait au système de moduler localement sa stratégie de décision en fonction des signaux les plus discriminants. Elle resterait compatible avec l’interprétabilité, dans la mesure où les poids $\alpha_k(x)$ peuvent être extraits, visualisés et analysés a posteriori pour comprendre quelles sources d’information ont été privilégiées et pourquoi.
+Outre des bénéfices attendus en termes de précision, cette stratégie pourrait offrir une modélisation plus fine des comportements hétérogènes, particulièrement pertinente dans des contextes sociaux ou économiques marqués par une diversité de profils et de logiques décisionnelles, comme dans le cas étudié notamment. 
+
+
+# Conclusion
+
+Bien que certains modèles individuels, notamment le LightGBM global, aient affiché d’excellentes performances (F1-score élevé, AUC proche de 0.94, accuracy ≈ 84 % en test aveugle intermédiaire), le choix final du méta-modèle segmenté et calibré ne repose pas uniquement sur une amélioration purement quantitative des scores. Il s’inscrit également dans une logique d’équilibre global, tenant compte des spécificités propres à chacun des modèles, et visant à maximiser à la fois la robustesse, l’adaptabilité et l’explicabilité du système de prédiction.
+
+Le LightGBM seul aurait sans doute suffi dans une démarche exclusivement axée sur la performance brute. Toutefois, les analyses ont montré que la segmentation améliore non seulement les résultats globaux (accuracy ≈ 88–89 %, AUC ≈ 0.96), mais semble surtout permettre une meilleure gestion des cas atypiques, en particulier chez les actifs. Là où des modèles globaux comme LightGBM ont tendance à généraliser uniformément les décisions, le méta-modèle segmenté module ses prédictions selon les spécificités propres à chaque sous-population.
+
+Ce choix apparaît comme pertinent sur plusieurs plans :
+
+- Statistiquement, le stacking segmenté améliore l’équilibre entre sensibilité et spécificité, grâce à une calibration fine, à des seuils différenciés, et à une meilleure intégration des signaux issus de chaque sous-modèle ;
+- Méthodologiquement et opérationnellement, c’est surtout la structure segmentée — indépendamment du stacking — qui renforce l’interprétabilité contextuelle et la modularité du système. Toutefois, certains résultats ont mis en évidence qu’une segmentation seule, non accompagnée d’un mécanisme de régulation ou d’intégration, pouvait accentuer le risque de surapprentissage local, en particulier dans des sous-groupes très homogènes ou sur-représentés.
+
+Dans ce cadre, l’ajout d’un méta-modèle d’agrégation supervisée (stacking) apparaît comme un compromis robuste : il permet d’exploiter les spécificités de chaque segment tout en régulant leur contribution relative à la décision finale. En somme, cette approche pragmatique vise un système capable de s’adapter à la diversité des profils comme à l’évolution des données futures.
+
+Au vu des résultats obtenus en validation croisée et des prédictions intermédiaires issues du LightGBM, il est raisonnable d’espérer une accuracy légèrement supérieure en test aveugle. Un tel progrès viendrait non seulement confirmer les choix méthodologiques effectués, mais aussi souligner l’intérêt concret de la segmentation, de la calibration différenciée et de l’agrégation structurée dans une logique métier.
